@@ -1,0 +1,19 @@
+# Dev-only image: hot-reload via air. No platform pin here -- runs native
+# arch (arm64 on Apple Silicon) for speed; linux/amd64 is only forced when
+# building the production image for the server (Phase 5 concern).
+FROM golang:1.26-alpine
+
+RUN apk add --no-cache git
+
+WORKDIR /app
+
+RUN go install github.com/air-verse/air@latest
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+EXPOSE 8080
+
+CMD ["air", "-c", ".air.toml"]

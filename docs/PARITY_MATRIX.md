@@ -1,0 +1,31 @@
+# PARITY_MATRIX.md — Regression Parity Matrix
+
+> Daftar perilaku sistem lama yang harus dicek setara di sistem baru, kecuali ada item di `AUDIT_FINDINGS.md` yang disetujui untuk berubah. Status diisi selama Phase 2-4. Kolom "Perubahan disetujui?" merujuk ke ID temuan di `AUDIT_FINDINGS.md`. Bukti untuk setiap item ✅ ada di `docs/BUGS.md` § "Testing done so far".
+
+| # | Area | Perilaku sistem lama | Perubahan disetujui? | Status |
+|---|---|---|---|---|
+| 1 | Auth | Login karyawan via `nik`+password (guard `karyawan`), login admin terpisah via guard `user` | - | 🟡 Diverifikasi manual lewat browser (cookie namespace terpisah `emp_*`/`adm_*`), belum ada test otomatis untuk pemisahan guard itu sendiri |
+| 2 | Auth | Password bcrypt, hash lama harus tetap valid | - | ✅ PASS (`usecase/auth` test) |
+| 3 | Auth | Tidak ada rate limit login | A4 (diusulkan berubah) | ✅ PASS (`middleware` test — blokir setelah N percobaan, per-klien, reset setelah window) |
+| 4 | Check-in | Waktu `jam_in`/`jam_out`/`tgl_presensi` selalu digenerate server-side, bukan dari klien | - | 🟡 Benar secara desain (`CheckInInput` tidak punya field waktu, `time.Now()` dipanggil server-side) — belum ada test eksplisit yang mencoba menyuntik waktu dari klien |
+| 5 | Check-in | Validasi submit: `lokasi`, `status1`, `image` wajib ada | - (kemungkinan diperketat, lihat A/B validasi) | ⬜ Belum diuji |
+| 6 | Check-in | Foto disimpan sebagai file, path pola `nik-tanggal-status` | B8 (diusulkan jadi unik) | 🟡 Diverifikasi manual (nama file unik per event, `{unix_nano}.png`, lihat PROGRESS.md Phase 5) — belum ada test otomatis untuk collision/path-traversal |
+| 7 | Check-in | Notifikasi Telegram terkirim saat check-in/out | - (kredensial dipindah ke env, lihat A6) | ❌ **BELUM DIPORTING SAMA SEKALI** — tidak ada kode Telegram apapun di `services/api`. D-6 mencatat "pakai token lama dulu sampai akses BotFather didapat", tapi implementasinya sendiri belum pernah ditulis. **Butuh keputusan pemilik project**: apakah ini memang sengaja ditunda ke fase lain, atau terlewat dan perlu ditambahkan sebelum Phase 4 ditutup. |
+| 8 | Geofencing | Jarak dihitung tapi tidak ditegakkan (bebas check-in dari manapun) | A1 (diusulkan ditegakkan) | ✅ PASS (`usecase/attendance` test — di luar radius ditolak, di dalam radius diterima) |
+| 9 | Shift overnight | `SH03`: check-in berikutnya menutup baris kemarin bila `jam_out` masih NULL | B5 (dikonfirmasi dipertahankan) | ✅ PASS (`usecase/attendance` test) |
+| 10 | Shift overnight | Alur lama/WFH tidak punya logika overnight | B1 (kemungkinan disatukan) | ✅ PASS (satu alur unified menangani semua kasus, termasuk WFH bypass — diuji) |
+| 11 | Idempotency | Cooldown antar aksi: 30 menit (alur lama) vs 5 menit (alur EOS) | B1/B2 (kemungkinan disatukan+diperbaiki race condition) | ✅ PASS (`usecase/attendance` test — cooldown 5 menit ditegakkan setelah checkout) |
+| 12 | Keterlambatan | Ambang 09:15 (dashboard/laporan) vs 09:00 (riwayat pribadi) | B3 (perlu satu ambang) | 🟡 Satu ambang per shift (`late_grace_minutes`) sudah konsisten dipakai di semua tempat secara desain, diuji untuk kasus umum — belum ada test yang secara eksplisit membandingkan nilai di dashboard vs riwayat pribadi |
+| 13 | Keterlambatan | Hanya check-in yang dinilai terlambat; tidak ada overtime/pulang-cepat | B4 (opsional fitur baru) | ✅ PASS (`usecase/attendance` test — `is_early_leave` diset saat checkout sebelum jam pulang shift) |
+| 14 | Izin/sakit | Insert langsung tanpa approval; tidak memengaruhi rekap kehadiran | B6 (opsional diperbaiki) | ✅ PASS (`usecase/leave` + `usecase/recap` test — submit default pending, hanya approved yang mengecualikan dari "alpha") |
+| 15 | Task | `edit_task`/`update_task` tanpa scoping kepemilikan (IDOR) | A5 (diusulkan diperbaiki) | ✅ PASS (`usecase/task` test — non-owner ditolak `ErrNotFound`, task terbukti tidak berubah) |
+| 16 | Dashboard | Leaderboard jam masuk semua karyawan terlihat oleh siapa saja yang login | - (perlu dikonfirmasi apakah ini disengaja) | N/A — diganti desain: dashboard admin sekarang cuma ringkasan harian (total karyawan/departemen/telat/dsb.), bukan leaderboard per-karyawan yang bisa dilihat karyawan lain. Karyawan tidak bisa lihat data karyawan lain di dashboard mereka sendiri. |
+| 17 | Laporan | `cetakrekap` pivot 31 kolom per bulan, per karyawan | - | 🟡 Diganti dengan day-by-day walk di Go (bukan SQL pivot), diuji untuk kasus umum (hadir/izin/alpha) — belum ada test untuk edge case bulan pendek (Februari) |
+| 18 | Laporan | `cetaklaporan`/`cetakrekap` menerima `nik` sembarang tanpa validasi keberadaan | - (akan otomatis lebih aman di sistem baru) | ✅ N/A — endpoint rekap baru butuh admin auth (RBAC teruji), employee_id yang tidak ada akan menghasilkan array kosong, bukan error yang membocorkan informasi |
+| 19 | Monitoring | Admin bisa lihat peta/lokasi/foto presensi karyawan manapun via `tampilkanpeta` | - (disengaja, fitur admin) | 🟡 RBAC admin-only teruji secara umum (`middleware` test); belum ada test khusus endpoint monitoring itu sendiri |
+| 20 | Konfigurasi | Edit "lokasi kantor & radius" di UI admin tidak berefek ke check-in | A1 (akan diperbaiki bila geofencing ditegakkan) | ✅ PASS — radius yang dipakai test attendance berasal dari baris `office_locations` yang dibuat lewat repo yang sama dengan yang dipakai admin config, bukan hardcode |
+| 21 | Storage | Endpoint symlink/maintenance publik tanpa auth | A2 (diusulkan tidak diporting) | ✅ PASS — dikonfirmasi tidak ada route symlink/maintenance apapun di `cmd/api/main.go` |
+| 22 | Role admin | Semua akun admin punya akses sama, tidak ada role-based restriction | A8 (perlu klarifikasi) | ✅ PASS (`middleware` test — role `admin` biasa ditolak 403 di route superadmin-only, `superadmin` diterima) |
+| 23 | Scheduled jobs | Tidak ada cron/job otomatis sama sekali | B9 (opsional fitur baru) | 🟡 Job D-17 (flag no-checkout) jalan via goroutine+ticker, diverifikasi manual hidup di container (PROGRESS.md Phase 5) — belum ada test otomatis |
+
+Status legend: ⬜ Belum diuji · 🟡 Sebagian (diverifikasi manual atau benar secara desain, belum ada test otomatis penuh) · ✅ PASS · ❌ FAIL / belum diimplementasikan (butuh bug-fix loop atau keputusan, catat di `BUGS.md`)

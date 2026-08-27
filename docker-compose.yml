@@ -1,0 +1,73 @@
+# Local dev stack. No `platform:` pin on any service -- runs native arch
+# (e.g. arm64 on Apple Silicon) for speed. linux/amd64 is only forced when
+# building images for the server (a Phase 5 concern, not this file).
+#
+# Business logic is untouched here -- this file and its Dockerfiles only
+# stand the stack up (Postgres + API + web + Adminer) and prove /health is
+# green end-to-end. See docs/PROGRESS.md.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./services/api
+      dockerfile: Dockerfile.dev
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      PORT: ${PORT}
+      STORAGE_DIR: ${STORAGE_DIR}
+      ACCESS_TOKEN_TTL_SECONDS: ${ACCESS_TOKEN_TTL_SECONDS}
+      FLAG_JOB_INTERVAL_MINUTES: ${FLAG_JOB_INTERVAL_MINUTES}
+      FLAG_JOB_STALE_AFTER_MINUTES: ${FLAG_JOB_STALE_AFTER_MINUTES}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./services/api:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile.dev
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+      NEXT_PUBLIC_MAP_TILE_URL: ${NEXT_PUBLIC_MAP_TILE_URL}
+      API_INTERNAL_URL: http://api:8080
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+      - web_node_modules:/app/node_modules
+      - web_next_cache:/app/apps/web/.next
+    depends_on:
+      - api
+
+  adminer:
+    image: adminer
+    ports:
+      - "8081:8080"
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:
+  web_node_modules:
+  web_next_cache:

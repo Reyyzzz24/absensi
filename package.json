@@ -1,0 +1,8 @@
+{
+  "name": "absensi-next",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
+}

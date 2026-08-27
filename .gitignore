@@ -1,0 +1,30 @@
+# Node / pnpm
+node_modules/
+.pnpm-store/
+.next/
+apps/*/dist/
+apps/*/build/
+
+# Go
+services/api/bin/
+services/api/tmp/
+services/api/storage/
+*.exe
+
+# Next.js dev container node_modules bind-mount artifact
+apps/web/.next/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+
+# Docker
+deploy/**/data/

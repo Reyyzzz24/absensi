@@ -1,0 +1,940 @@
+openapi: 3.1.0
+info:
+  title: Absensi API
+  version: 0.1.0-draft
+  description: >
+    Draft API contract for Phase 1. Provisional pending live DB dump review
+    (docs/DECISIONS.md D-12). Unifies the legacy PresensiController and
+    AbsensiController/EOS flows into one check-in/out flow per D-8.
+
+servers:
+  - url: /api/v1
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: auth
+  - name: attendance
+  - name: leave
+  - name: tasks
+  - name: dashboard
+  - name: reports
+  - name: config
+  - name: admin
+
+paths:
+  # ---------------------------------------------------------------- auth
+  /auth/employee/login:
+    post:
+      tags: [auth]
+      summary: Employee (karyawan) login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nik, password]
+              properties:
+                nik: { type: string }
+                password: { type: string, format: password }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthTokens" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /auth/admin/login:
+    post:
+      tags: [auth]
+      summary: Admin/back-office login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string, format: password }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthTokens" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      summary: Refresh access token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthTokens" }
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: >
+        Logout -- revokes the given refresh token (D-24) so it can no longer
+        be used with /auth/refresh, even though it remains cryptographically
+        valid until it expires naturally. Body is optional; a missing or
+        already-invalid token still returns 204 (idempotent, never fails the
+        client just to end an already-gone session).
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token: { type: string }
+      responses:
+        "204": { description: No Content }
+
+  # ------------------------------------------------ self-service (shared)
+  # Every endpoint below accepts EITHER an employee or an admin bearer
+  # token (security: bearerAuth: [employee, admin]) -- the handler branches
+  # on the token's own audience claim rather than the route dictating one.
+  # There is no id parameter anywhere in this group; every operation acts
+  # on the caller's own record only (D-5 IDOR pattern).
+  /me:
+    get:
+      tags: [profile]
+      summary: Current user's own profile (employee or admin)
+      security:
+        - bearerAuth: [employee, admin]
+      responses:
+        "200": { description: OK }
+    patch:
+      tags: [profile]
+      summary: Update own editable fields (currently just phone)
+      security:
+        - bearerAuth: [employee, admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                phone: { type: string }
+      responses:
+        "200": { description: OK }
+
+  /me/avatar:
+    get:
+      tags: [profile]
+      summary: Stream own avatar image
+      security:
+        - bearerAuth: [employee, admin]
+      responses:
+        "200": { description: OK, content: { image/png: {} } }
+        "404": { description: No avatar set }
+    post:
+      tags: [profile]
+      summary: Upload/replace own avatar (base64 PNG/JPEG/WebP, max 2MB decoded)
+      security:
+        - bearerAuth: [employee, admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                photo: { type: string, description: base64-encoded image bytes }
+      responses:
+        "200": { description: OK }
+        "422": { description: Invalid/oversized/unsupported image }
+
+  /me/change-password:
+    post:
+      tags: [profile]
+      summary: >
+        Change own password. Requires current_password to match before
+        rehashing -- never allow silently swapping a password (same
+        principle as D-3's admin-edit-employee fix, applied to self-service).
+      security:
+        - bearerAuth: [employee, admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: { type: string }
+                new_password: { type: string, minLength: 8 }
+      responses:
+        "204": { description: No Content }
+        "422": { description: Current password incorrect }
+
+  /notifications:
+    get:
+      tags: [notifications]
+      summary: Own notifications, paginated, most recent first
+      security:
+        - bearerAuth: [employee, admin]
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200": { description: OK }
+
+  /notifications/unread-count:
+    get:
+      tags: [notifications]
+      summary: Own unread notification count (polled by the bell UI every 30-60s)
+      security:
+        - bearerAuth: [employee, admin]
+      responses:
+        "200": { description: OK }
+
+  /notifications/{id}/read:
+    patch:
+      tags: [notifications]
+      summary: Mark one own notification read
+      security:
+        - bearerAuth: [employee, admin]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "204": { description: No Content }
+
+  /notifications/read-all:
+    patch:
+      tags: [notifications]
+      summary: Mark all own notifications read
+      security:
+        - bearerAuth: [employee, admin]
+      responses:
+        "204": { description: No Content }
+
+  /notification-preferences:
+    get:
+      tags: [notifications]
+      summary: Own per-type notification preferences (opt-out model -- missing type = enabled)
+      security:
+        - bearerAuth: [employee, admin]
+      responses:
+        "200": { description: OK }
+    put:
+      tags: [notifications]
+      summary: Enable/disable one notification type for self
+      security:
+        - bearerAuth: [employee, admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, enabled]
+              properties:
+                type: { type: string }
+                enabled: { type: boolean }
+      responses:
+        "204": { description: No Content }
+
+  # ------------------------------------------------------------ attendance
+  /attendance/today:
+    get:
+      tags: [attendance]
+      summary: Current employee's attendance state for today (incl. any still-open overnight shift, D-14)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Attendance" }
+
+  /attendance/check-in:
+    post:
+      tags: [attendance]
+      summary: >
+        Unified check-in (replaces legacy /presensi/store, /presensi/wfhstore,
+        /absensi/store -- D-8). Server determines in vs out based on today's
+        (or a still-open overnight, D-14) attendance row. Server-side geofencing
+        enforced per D-1 (100m default, from office_locations, not hardcoded);
+        rejects the request if outside radius, unless is_wfh is true or the
+        employee has an approved field_assignment (dinas luar, D-21) for today.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [latitude, longitude, photo, is_wfh]
+              properties:
+                latitude: { type: number, format: double }
+                longitude: { type: number, format: double }
+                photo:
+                  type: string
+                  format: byte
+                  description: Base64-encoded selfie photo (validated server-side, unlike legacy)
+                is_wfh: { type: boolean }
+      responses:
+        "200":
+          description: Check-in/out recorded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Attendance" }
+        "409":
+          description: Duplicate/cooldown violation (idempotency, D-9)
+        "422":
+          description: Outside geofence radius (D-1) or validation failure
+
+  /attendance/geofence:
+    get:
+      tags: [attendance]
+      summary: >
+        Active office locations (id, name, lat/lng, radius) exposed to the
+        checking-in employee -- display-only, used to draw the geofence
+        circle/pin on the check-in page's map and show a live inside/outside
+        radius hint before submit. The actual enforcement is still
+        server-side only (D-1); this never gates submission client-side.
+      security:
+        - bearerAuth: [employee]
+      responses:
+        "200": { description: OK }
+
+  /attendance/history:
+    get:
+      tags: [attendance]
+      summary: Current employee's attendance history
+      parameters:
+        - name: month
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 12 }
+        - name: year
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Attendance" }
+
+  # ------------------------------------------------------------------ leave
+  /leave-requests:
+    get:
+      tags: [leave]
+      summary: List the current employee's own leave/sick requests
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/LeaveRequest" }
+    post:
+      tags: [leave]
+      summary: >
+        Submit a leave or sick request (merges legacy separate izin/sakit forms
+        into one, per D-16). Starts in 'pending' status (D-15, no longer auto-accepted).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, start_date, end_date]
+              properties:
+                type: { $ref: "#/components/schemas/LeaveType" }
+                start_date: { type: string, format: date }
+                end_date: { type: string, format: date }
+                reason: { type: string }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LeaveRequest" }
+
+  /admin/leave-requests:
+    get:
+      tags: [leave, admin]
+      summary: List leave/sick requests, filterable by status (admin review queue, D-15)
+      security:
+        - bearerAuth: [admin]
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/LeaveStatus" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/LeaveRequest" }
+
+  /admin/leave-requests/{id}/review:
+    post:
+      tags: [leave, admin]
+      summary: Approve or reject a leave request (admin, D-15)
+      security:
+        - bearerAuth: [admin]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [approved, rejected] }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LeaveRequest" }
+
+  # ------------------------------------------------------------------ tasks
+  /tasks:
+    get:
+      tags: [tasks]
+      summary: List current employee's tasks
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Task" }
+    post:
+      tags: [tasks]
+      summary: Create a task for the current employee
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+
+  /tasks/{id}:
+    put:
+      tags: [tasks]
+      summary: >
+        Update a task. Server enforces employee_id = current user (fixes legacy
+        IDOR, A5/D-5) -- returns 403/404 if the task does not belong to the caller.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskInput" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # -------------------------------------------------------------- dashboard
+  /dashboard/summary:
+    get:
+      tags: [dashboard]
+      summary: Employee dashboard summary (today's status, lateness, this month's stats)
+      responses:
+        "200": { description: OK }
+
+  /admin/dashboard/summary:
+    get:
+      tags: [dashboard, admin]
+      summary: Admin dashboard summary
+      security:
+        - bearerAuth: [admin]
+      responses:
+        "200": { description: OK }
+
+  # ---------------------------------------------------------------- reports
+  /admin/attendance/monitoring:
+    get:
+      tags: [reports, admin]
+      summary: Live monitoring of all employees' attendance for a given date
+      security:
+        - bearerAuth: [admin]
+      parameters:
+        - name: date
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        "200": { description: OK }
+
+  /admin/attendance/{id}/location:
+    get:
+      tags: [reports, admin]
+      summary: View a specific attendance record's check-in/out location & photo (admin monitoring feature, by design per D-7 RBAC)
+      security:
+        - bearerAuth: [admin]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200": { description: OK }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /admin/reports/recap:
+    get:
+      tags: [reports, admin]
+      summary: >
+        Monthly recap per employee (replaces legacy fragile 31-column SQL pivot,
+        cetakrekap). Excludes approved leave days from "absent" count (D-15).
+      security:
+        - bearerAuth: [admin]
+      parameters:
+        - name: employee_id
+          in: query
+          schema: { type: integer }
+        - name: month
+          in: query
+          required: true
+          schema: { type: integer }
+        - name: year
+          in: query
+          required: true
+          schema: { type: integer }
+      responses:
+        "200": { description: OK }
+
+  /admin/reports/recap/export:
+    get:
+      tags: [reports, admin]
+      summary: >
+        Same recap grid as GET /admin/reports/recap, streamed as an .xlsx
+        file -- calls the identical recap.Service.Generate so the export can
+        never drift from what's shown on screen (single source of truth).
+      security:
+        - bearerAuth: [admin]
+      parameters:
+        - name: employee_id
+          in: query
+          schema: { type: integer }
+        - name: month
+          in: query
+          required: true
+          schema: { type: integer }
+        - name: year
+          in: query
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: {}
+
+  /admin/reports/flagged-no-checkout:
+    get:
+      tags: [reports, admin]
+      summary: Attendance rows flagged by the daily job as never checked out (D-17)
+      security:
+        - bearerAuth: [admin]
+      responses:
+        "200": { description: OK }
+
+  # ---------------------------------------------------------------- config
+  /admin/config/company:
+    get:
+      tags: [config, admin]
+      summary: >
+        Company profile (name, logo) -- deliberately a single-row config,
+        this app has no multi-tenant/workspace concept.
+      security:
+        - bearerAuth: [admin]
+      responses:
+        "200": { description: OK }
+    put:
+      tags: [config, admin]
+      summary: Update company name
+      security:
+        - bearerAuth: [superadmin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "200": { description: OK }
+
+  /admin/config/company/logo:
+    get:
+      tags: [config, admin]
+      summary: Stream the company logo image
+      security:
+        - bearerAuth: [admin]
+      responses:
+        "200": { description: OK, content: { image/png: {} } }
+        "404": { description: No logo set }
+    post:
+      tags: [config, admin]
+      summary: Upload/replace company logo (base64 PNG/JPEG/WebP, max 2MB decoded)
+      security:
+        - bearerAuth: [superadmin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                photo: { type: string, description: base64-encoded image bytes }
+      responses:
+        "200": { description: OK }
+        "422": { description: Invalid/oversized/unsupported image }
+
+  /admin/config/office-locations:
+    get:
+      tags: [config, admin]
+      summary: List office locations (name, lat/lng, radius -- actually enforced now, D-1)
+      security:
+        - bearerAuth: [admin]
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [config, admin]
+      summary: Create office location & radius
+      security:
+        - bearerAuth: [superadmin]
+      responses:
+        "201": { description: Created }
+
+  /admin/config/office-locations/{id}:
+    put:
+      tags: [config, admin]
+      summary: Update an existing office location's name/coordinates/radius/active flag
+      security:
+        - bearerAuth: [superadmin]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200": { description: OK }
+        "404": { description: Location not found }
+
+  /admin/employees:
+    get:
+      tags: [employees, admin]
+      summary: List employees (karyawan)
+      security:
+        - bearerAuth: [admin]
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [employees, admin]
+      summary: >
+        Create an employee. Password must be supplied explicitly by the admin
+        -- does not replicate the legacy hardcoded "12345" initial password
+        (LOGIC_SPEC.md §9 / D-3).
+      security:
+        - bearerAuth: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EmployeeInput" }
+      responses:
+        "201": { description: Created }
+        "409": { description: NIK already registered }
+
+  /admin/employees/{id}:
+    put:
+      tags: [employees, admin]
+      summary: >
+        Update an employee. Password is only rehashed when a new one is
+        supplied in the request body; omitting it leaves the existing hash
+        untouched (does not replicate the legacy reset-on-edit bug, D-3).
+        Also used to deactivate/reactivate via is_active.
+      security:
+        - bearerAuth: [admin]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EmployeeInput" }
+      responses:
+        "200": { description: OK }
+        "404": { description: Employee not found }
+
+  /admin/config/shifts:
+    get:
+      tags: [config, admin]
+      summary: List shifts (jam_kerja)
+      security:
+        - bearerAuth: [admin]
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [config, admin]
+      summary: Create a shift, including late_grace_minutes (D-10)
+      security:
+        - bearerAuth: [superadmin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ShiftInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Shift" }
+
+  /admin/config/shifts/{id}:
+    put:
+      tags: [config, admin]
+      summary: Update a shift's times / late_grace_minutes (D-10)
+      security:
+        - bearerAuth: [superadmin]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ShiftInput" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Shift" }
+
+  /admin/config/work-schedules:
+    post:
+      tags: [config, admin]
+      summary: >
+        Assign a specific-date shift to an employee (jadwal_kerja). Overrides
+        that employee's weekly default for that date (D-18).
+      security:
+        - bearerAuth: [admin]
+      responses:
+        "201": { description: Created }
+
+  /admin/config/weekly-shift-defaults:
+    post:
+      tags: [config, admin]
+      summary: Set an employee's recurring weekly shift default (konfigurasi_jamkerja)
+      security:
+        - bearerAuth: [admin]
+      responses:
+        "201": { description: Created }
+
+  /admin/config/field-assignments:
+    get:
+      tags: [config, admin]
+      summary: List "dinas luar" (off-site work) pre-approvals (D-21)
+      security:
+        - bearerAuth: [admin]
+      parameters:
+        - name: employee_id
+          in: query
+          schema: { type: integer }
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [config, admin]
+      summary: >
+        Pre-approve an employee for off-site work on a given date. Check-in on
+        that date bypasses the office_locations radius check (D-1/D-21).
+      security:
+        - bearerAuth: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [employee_id, work_date]
+              properties:
+                employee_id: { type: integer }
+                work_date: { type: string, format: date }
+                note: { type: string }
+      responses:
+        "201": { description: Created }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthorized:
+      description: Invalid credentials or missing/expired token
+    Forbidden:
+      description: Authenticated but not permitted (RBAC, D-7)
+    NotFound:
+      description: Resource not found
+    RateLimited:
+      description: Too many attempts (D-4, login rate limiting)
+
+  schemas:
+    AuthTokens:
+      type: object
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        expires_in: { type: integer }
+
+    LeaveType:
+      type: string
+      enum: [izin, sakit]
+
+    LeaveStatus:
+      type: string
+      enum: [pending, approved, rejected]
+
+    LeaveRequest:
+      type: object
+      properties:
+        id: { type: integer }
+        employee_id: { type: integer }
+        type: { $ref: "#/components/schemas/LeaveType" }
+        start_date: { type: string, format: date }
+        end_date: { type: string, format: date }
+        reason: { type: string }
+        status: { $ref: "#/components/schemas/LeaveStatus" }
+        reviewed_by: { type: integer, nullable: true }
+        reviewed_at: { type: string, format: date-time, nullable: true }
+
+    Attendance:
+      type: object
+      properties:
+        id: { type: integer }
+        employee_id: { type: integer }
+        work_date: { type: string, format: date }
+        cycle_number: { type: integer, description: "Supports multiple check-in/out cycles per day, D-23" }
+        shift_id: { type: integer, nullable: true }
+        is_wfh: { type: boolean }
+        check_in_at: { type: string, format: date-time, nullable: true }
+        check_in_distance_m: { type: integer, nullable: true }
+        is_late: { type: boolean, nullable: true }
+        check_out_at: { type: string, format: date-time, nullable: true }
+        check_out_distance_m: { type: integer, nullable: true }
+        is_early_leave: { type: boolean, nullable: true }
+        status: { type: string, enum: [open, closed, flagged_no_checkout] }
+
+    Shift:
+      type: object
+      properties:
+        id: { type: integer }
+        code: { type: string }
+        name: { type: string }
+        is_day_off: { type: boolean }
+        start_time: { type: string, nullable: true }
+        end_time: { type: string, nullable: true }
+        is_overnight: { type: boolean }
+        late_grace_minutes: { type: integer }
+
+    EmployeeInput:
+      type: object
+      required: [nik, full_name]
+      properties:
+        nik: { type: string }
+        full_name: { type: string }
+        password:
+          type: string
+          description: Required on create. Optional on update -- omit to keep the existing password.
+        department_id: { type: integer, nullable: true }
+        position: { type: string }
+        phone: { type: string }
+        is_active: { type: boolean, default: true }
+
+    ShiftInput:
+      type: object
+      required: [code, name, is_day_off]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        is_day_off: { type: boolean }
+        start_time: { type: string }
+        end_time: { type: string }
+        late_grace_minutes: { type: integer, default: 15 }
+
+    TaskInput:
+      type: object
+      required: [title, starts_at]
+      properties:
+        title: { type: string }
+        detail: { type: string }
+        starts_at: { type: string, format: date-time }
+        ends_at: { type: string, format: date-time }
+        status: { type: string }
+
+    Task:
+      allOf:
+        - $ref: "#/components/schemas/TaskInput"
+        - type: object
+          properties:
+            id: { type: integer }
+            employee_id: { type: integer }

@@ -1,0 +1,22 @@
+# Dev-only image: runs `next dev` with hot reload. No platform pin -- native
+# arch for speed; linux/amd64 is only forced when building for the server.
+#
+# Build context is the REPO ROOT (not apps/web) so npm workspaces can see
+# packages/contracts -- apps/web depends on @absensi-next/contracts (Phase 3).
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package.json ./
+COPY apps/web/package.json apps/web/package.json
+COPY packages/contracts/package.json packages/contracts/package.json
+RUN npm install
+
+COPY packages/contracts packages/contracts
+COPY apps/web apps/web
+
+WORKDIR /app/apps/web
+
+EXPOSE 3000
+
+CMD ["npm", "run", "dev"]
