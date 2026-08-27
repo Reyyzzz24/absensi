@@ -16,6 +16,7 @@ import (
 
 	"github.com/eprisi/absensi-next/services/api/internal/domain"
 	"github.com/eprisi/absensi-next/services/api/internal/repo"
+	"github.com/eprisi/absensi-next/services/api/internal/usecase/holiday"
 )
 
 type DayStatus string
@@ -29,9 +30,10 @@ const (
 )
 
 type Day struct {
-	Date   string    `json:"date"`
-	Status DayStatus `json:"status"`
-	IsLate bool      `json:"is_late,omitempty"`
+	Date      string    `json:"date"`
+	Status    DayStatus `json:"status"`
+	IsLate    bool      `json:"is_late,omitempty"`
+	IsHoliday bool      `json:"is_holiday,omitempty"` // set even when Status=hadir -- e.g. voluntary/overtime work on a libur day (D-25)
 }
 
 type EmployeeRecap struct {
@@ -54,10 +56,11 @@ type Service struct {
 	attendance repo.AttendanceRepo
 	leave      repo.LeaveRequestRepo
 	schedules  repo.ShiftScheduleRepo
+	holidays   holiday.Service
 }
 
-func NewService(employees repo.EmployeeRepo, attendance repo.AttendanceRepo, leave repo.LeaveRequestRepo, schedules repo.ShiftScheduleRepo) Service {
-	return Service{employees: employees, attendance: attendance, leave: leave, schedules: schedules}
+func NewService(employees repo.EmployeeRepo, attendance repo.AttendanceRepo, leave repo.LeaveRequestRepo, schedules repo.ShiftScheduleRepo, holidays holiday.Service) Service {
+	return Service{employees: employees, attendance: attendance, leave: leave, schedules: schedules, holidays: holidays}
 }
 
 // Generate builds the recap grid for the given year/month. If employeeID is
@@ -78,17 +81,26 @@ func (s Service) Generate(ctx context.Context, year, month int, employeeID int64
 			employees = []domain.Employee{*e}
 		}
 	} else {
-		all, err := s.employees.List(ctx)
+		all, err := s.employees.List(ctx, "")
 		if err != nil {
 			return nil, err
 		}
 		employees = all
 	}
 
+	// Resolved ONCE for the whole month, not per employee -- all three
+	// holiday sources (weekend/national/company, D-25) are company-wide,
+	// not per-employee, so recomputing this per employee in the loop below
+	// would be pure waste at N employees.
+	holidayMap, err := s.holidays.ResolveRange(ctx, start, end)
+	if err != nil {
+		return nil, err
+	}
+
 	result := &MonthRecap{Year: year, Month: month, DaysInMonth: daysInMonth}
 
 	for _, emp := range employees {
-		empRecap, err := s.generateForEmployee(ctx, emp, start, end, daysInMonth)
+		empRecap, err := s.generateForEmployee(ctx, emp, start, end, daysInMonth, holidayMap)
 		if err != nil {
 			return nil, err
 		}
@@ -98,7 +110,7 @@ func (s Service) Generate(ctx context.Context, year, month int, employeeID int64
 	return result, nil
 }
 
-func (s Service) generateForEmployee(ctx context.Context, emp domain.Employee, start, end time.Time, daysInMonth int) (EmployeeRecap, error) {
+func (s Service) generateForEmployee(ctx context.Context, emp domain.Employee, start, end time.Time, daysInMonth int, holidayMap map[string]holiday.DayStatus) (EmployeeRecap, error) {
 	attendances, err := s.attendance.ListByEmployeeAndDateRange(ctx, emp.ID, start, end)
 	if err != nil {
 		return EmployeeRecap{}, err
@@ -145,11 +157,13 @@ func (s Service) generateForEmployee(ctx context.Context, emp domain.Employee, s
 		key := date.Format("2006-01-02")
 
 		day := Day{Date: key}
+		holidayStatus := holidayMap[key]
 
 		switch {
 		case byDate[key].present:
 			day.Status = DayStatusHadir
 			day.IsLate = byDate[key].late
+			day.IsHoliday = holidayStatus.IsHoliday // e.g. voluntary/overtime work on a libur day -- still "hadir", just tagged
 			if day.IsLate {
 				summary["telat"]++
 			}
@@ -157,6 +171,12 @@ func (s Service) generateForEmployee(ctx context.Context, emp domain.Employee, s
 			day.Status = DayStatusIzin
 		case leaveByDate[key] == domain.LeaveTypeSakit:
 			day.Status = DayStatusSakit
+		case holidayStatus.IsHoliday:
+			// D-25: weekend/national/company holiday -- excluded from Alpha
+			// regardless of whether this employee has a per-shift day-off
+			// assignment for the date (that mechanism, checked below, is
+			// now purely a fallback for cases the three sources don't cover).
+			day.Status = DayStatusLibur
 		default:
 			shift, err := s.schedules.ResolveShift(ctx, emp.ID, date)
 			if err != nil {

@@ -640,6 +640,169 @@ paths:
         "200": { description: OK }
         "422": { description: Invalid/oversized/unsupported image }
 
+  /admin/config/working-weekdays:
+    put:
+      tags: [config, admin, holidays]
+      summary: >
+        Set the company's work week (D-25 holiday resolver) -- ISO weekday
+        numbers (1=Monday..7=Sunday) considered work days. Not hardcoded
+        Sat/Sun -- a 6-day work week is just {1,2,3,4,5,6}.
+      security:
+        - bearerAuth: [superadmin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [working_weekdays]
+              properties:
+                working_weekdays:
+                  type: array
+                  items: { type: integer, minimum: 1, maximum: 7 }
+      responses:
+        "200": { description: OK }
+        "422": { description: Invalid weekday values }
+
+  # ------------------------------------------------------------- holidays
+  # D-25: three sources combined by one resolver (never generates
+  # attendance rows) -- configurable weekend (see working-weekdays above),
+  # nationally-synced holidays (incl. cuti bersama, cached locally), and
+  # manual company holidays. Precedence when sources overlap for the same
+  # date: national > company > weekend.
+  /holidays/calendar:
+    get:
+      tags: [holidays]
+      summary: >
+        Combined calendar view for a month -- one entry per date with its
+        resolved holiday status. Both audiences (non-sensitive read), so a
+        future employee weekly-strip can mark holidays too, not just the
+        admin "Hari Libur" page.
+      security:
+        - bearerAuth: [employee]
+        - bearerAuth: [admin]
+      parameters:
+        - name: year
+          in: query
+          required: true
+          schema: { type: integer }
+        - name: month
+          in: query
+          required: true
+          schema: { type: integer, minimum: 1, maximum: 12 }
+      responses:
+        "200": { description: OK }
+
+  /admin/holidays/calendar:
+    get:
+      tags: [holidays, admin]
+      summary: Same as /holidays/calendar, admin-only mount for the "Hari Libur" page.
+      security:
+        - bearerAuth: [admin]
+      parameters:
+        - name: year
+          in: query
+          required: true
+          schema: { type: integer }
+        - name: month
+          in: query
+          required: true
+          schema: { type: integer, minimum: 1, maximum: 12 }
+      responses:
+        "200": { description: OK }
+
+  /admin/holidays/national:
+    get:
+      tags: [holidays, admin]
+      summary: List cached national holidays for a year (incl. cuti bersama).
+      security:
+        - bearerAuth: [admin]
+      parameters:
+        - name: year
+          in: query
+          required: true
+          schema: { type: integer }
+      responses:
+        "200": { description: OK }
+
+  /admin/holidays/national/sync:
+    post:
+      tags: [holidays, admin]
+      summary: >
+        Fetch the external holiday calendar and upsert into the local
+        cache for the given year. Rows an admin has since hand-edited
+        (source=manual) are never overwritten. Never called on the
+        attendance/recap request path -- admin-triggered only. On source
+        failure, the existing cache is left untouched (graceful
+        degradation).
+      security:
+        - bearerAuth: [superadmin]
+      parameters:
+        - name: year
+          in: query
+          required: true
+          schema: { type: integer }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { synced: { type: integer } } } } } }
+        "502": { description: External source unreachable/failed -- cache untouched }
+
+  /admin/holidays/company:
+    get:
+      tags: [holidays, admin]
+      summary: List manual company holidays (single date or range).
+      security:
+        - bearerAuth: [admin]
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [holidays, admin]
+      summary: Create a manual company holiday (single date if end_date omitted, or a range).
+      security:
+        - bearerAuth: [superadmin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, start_date]
+              properties:
+                start_date: { type: string, format: date }
+                end_date: { type: string, format: date, description: "defaults to start_date" }
+                name: { type: string }
+                type: { type: string, enum: [libur, cuti_bersama], default: libur }
+                note: { type: string }
+      responses:
+        "201": { description: Created }
+        "422": { description: Invalid dates/range }
+
+  /admin/holidays/company/{id}:
+    put:
+      tags: [holidays, admin]
+      summary: Update a manual company holiday.
+      security:
+        - bearerAuth: [superadmin]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200": { description: OK }
+        "404": { description: Not found }
+    delete:
+      tags: [holidays, admin]
+      summary: Delete a manual company holiday.
+      security:
+        - bearerAuth: [superadmin]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "204": { description: Deleted }
+
   /admin/config/office-locations:
     get:
       tags: [config, admin]

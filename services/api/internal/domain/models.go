@@ -8,7 +8,11 @@
 // decoration.
 package domain
 
-import "time"
+import (
+	"time"
+
+	"github.com/lib/pq"
+)
 
 type Role struct {
 	ID        int64     `gorm:"primaryKey" json:"id"`
@@ -160,6 +164,7 @@ type Attendance struct {
 	CheckOutDistanceM *int       `json:"check_out_distance_m,omitempty"`
 	CheckOutPhotoPath *string    `json:"check_out_photo_path,omitempty"`
 	IsEarlyLeave      *bool      `json:"is_early_leave,omitempty"`
+	IsHoliday         bool       `json:"is_holiday"` // resolved at check-in time (weekend/national/company) -- D-25
 
 	Status AttendanceStatus `json:"status"`
 
@@ -241,6 +246,53 @@ type CompanySettings struct {
 	ID       int64   `gorm:"primaryKey" json:"id"`
 	Name     string  `json:"name"`
 	LogoPath *string `json:"logo_path,omitempty"`
+	// WorkingWeekdays: ISO weekday numbers (1=Monday..7=Sunday) considered
+	// work days. Anything not listed is a "weekend" day for the holiday
+	// resolver (D-25) -- deliberately not hardcoded Sat/Sun so a 6-day work
+	// week (only Sunday off) is just a different array, not a code change.
+	WorkingWeekdays pq.Int64Array `gorm:"type:smallint[]" json:"working_weekdays"`
+}
+
+type HolidaySource string
+
+const (
+	HolidaySourceSync   HolidaySource = "sync"
+	HolidaySourceManual HolidaySource = "manual"
+)
+
+// NationalHoliday is a locally-cached row synced from an external calendar
+// (never fetched at request time, D-25). Rows a human has hand-edited flip
+// to Source=manual so a later sync never silently overwrites them again.
+type NationalHoliday struct {
+	ID            int64         `gorm:"primaryKey" json:"id"`
+	HolidayDate   time.Time     `gorm:"type:date;column:holiday_date" json:"holiday_date"`
+	Name          string        `json:"name"`
+	Year          int16         `json:"year"`
+	IsCutiBersama bool          `json:"is_cuti_bersama"`
+	Source        HolidaySource `json:"source"`
+	CreatedAt     time.Time     `json:"created_at"`
+	UpdatedAt     time.Time     `json:"updated_at"`
+}
+
+type CompanyHolidayType string
+
+const (
+	CompanyHolidayTypeLibur       CompanyHolidayType = "libur"
+	CompanyHolidayTypeCutiBersama CompanyHolidayType = "cuti_bersama"
+)
+
+// CompanyHoliday is an admin-managed manual holiday, single date (start ==
+// end) or a range (e.g. a multi-day company closure).
+type CompanyHoliday struct {
+	ID        int64              `gorm:"primaryKey" json:"id"`
+	StartDate time.Time          `gorm:"type:date" json:"start_date"`
+	EndDate   time.Time          `gorm:"type:date" json:"end_date"`
+	Name      string             `json:"name"`
+	Type      CompanyHolidayType `json:"type"`
+	Note      *string            `json:"note,omitempty"`
+	CreatedBy int64              `json:"created_by"`
+	CreatedAt time.Time          `json:"created_at"`
+	UpdatedAt time.Time          `json:"updated_at"`
 }
 
 // NotificationPreference is opt-out per type: a missing row means enabled.

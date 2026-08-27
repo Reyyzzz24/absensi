@@ -9,6 +9,7 @@ const CONFIG_LINKS = [
   { label: "Lokasi / Geofence", description: "Radius check-in, koordinat kantor.", href: "/admin/config/office-locations" },
   { label: "Jadwal & Shift", description: "Jam kerja, ambang telat per shift.", href: "/admin/config/shifts" },
   { label: "Dinas Luar", description: "Penugasan lapangan yang mengecualikan geofence.", href: "/admin/config/field-assignments" },
+  { label: "Hari Libur", description: "Hari kerja, sinkronisasi libur nasional, libur manual perusahaan.", href: "/admin/config/holidays" },
 ];
 
 // Auth check for <AdminShell> now lives in the route group's layout.tsx --

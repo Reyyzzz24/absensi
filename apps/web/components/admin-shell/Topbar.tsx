@@ -48,19 +48,23 @@ export function Topbar({ role }: { role?: string }) {
     <header className="sticky top-0 z-0 flex h-16 shrink-0 items-center gap-3 border-b border-border bg-white px-4 md:px-6 print:hidden">
       <SidebarTrigger className="text-muted-foreground md:hidden" />
 
-      <div className="relative flex-1 max-w-md">
+      {/* Plain GET form -- submitting (Enter) navigates to Karyawan with the
+          query in ?q=, which the employees page reads and forwards to
+          GET /admin/employees?q= (ILIKE on name/NIK, backend). Scoped to
+          employee search only for now, matching the placeholder copy --
+          not a cross-entity command palette (no absensi/laporan results). */}
+      <form method="get" action="/admin/employees" className="relative flex-1 max-w-md">
         <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-        {/* TODO: mock -- no global search endpoint exists yet. Purely
-            presentational for now (no onChange/search wiring). */}
         <input
           type="search"
-          placeholder="Cari karyawan, absensi..."
+          name="q"
+          placeholder="Cari karyawan..."
           className="h-9 w-full rounded-lg border-0 bg-secondary pl-9 pr-14 text-sm text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-ring focus:outline-none"
         />
         <kbd className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 rounded-md border border-border bg-white px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
           ⌘K
         </kbd>
-      </div>
+      </form>
 
       <div className="ml-auto flex items-center gap-1">
         {/* Repurposed from a dead "chat" placeholder (no messaging feature

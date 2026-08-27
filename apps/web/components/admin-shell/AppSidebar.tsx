@@ -17,9 +17,11 @@ import {
 } from "@/components/ui/sidebar";
 import { NAV_GROUPS, NAV_COMING_SOON } from "@/components/admin-shell/nav-config";
 import { NavPendingDot } from "@/components/nav/NavPendingDot";
+import { useCompany } from "@/components/admin-shell/CompanyContext";
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const { company } = useCompany();
 
   return (
     <Sidebar
@@ -28,9 +30,8 @@ export function AppSidebar() {
     >
       <SidebarHeader className="gap-3 p-3">
         <div className="flex items-center justify-between gap-2 px-1 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:gap-2">
-          {/* Org identity -- this app has no multi-tenant/workspace concept,
-              so this is a static brand card (not a functional switcher) to
-              match the reference layout's visual slot. */}
+          {/* Absensi Next = product brand, always shown here regardless of
+              company profile -- unrelated to the workspace card below. */}
           <div className="flex min-w-0 items-center gap-2 overflow-hidden">
             <div className="relative flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-[0_0_16px_rgba(47,107,255,0.55)]">
               <CalendarCheck2 className="size-4.5" />
@@ -46,17 +47,33 @@ export function AppSidebar() {
           <SidebarTrigger className="size-7 shrink-0 text-sidebar-foreground/70 hover:bg-white/8 hover:text-white" />
         </div>
 
-        {/* Workspace card -- decorative, mirrors the reference's org
-            switcher shape, but there is nothing to switch to. */}
+        {/* Workspace card -- reads live company-profile identity (name +
+            logo), the single source of truth also edited in
+            Pengaturan → Profil Perusahaan. Still not a functional switcher
+            (no multi-tenant concept), just the identity slot. */}
         <button
           type="button"
           className="flex items-center gap-2 rounded-xl bg-white/5 px-2.5 py-2 text-left transition hover:bg-white/8 group-data-[collapsible=icon]:hidden"
         >
-          <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-[#3B82F6]/20 text-[#93C5FD]">
-            <Building2 className="size-4" />
+          <div className="flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-md bg-[#3B82F6]/20 text-[#93C5FD]">
+            {company?.logo_path ? (
+              // eslint-disable-next-line @next/next/no-img-element -- proxy route, not a static asset next/image can optimize
+              // logo_path itself changes on every upload (storage filename is
+              // a timestamp, see LocalStore.SaveAvatar) -- using it as the
+              // cache-busting key means the sidebar swaps to the new image
+              // immediately after upload instead of the browser serving a
+              // stale cached response for the fixed proxy URL.
+              <img
+                src={`/api/admin/company/logo?v=${encodeURIComponent(company.logo_path)}`}
+                alt={company.name}
+                className="size-full object-cover"
+              />
+            ) : (
+              <Building2 className="size-4" />
+            )}
           </div>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-medium text-white">PT Absensi Digital</p>
+            <p className="truncate text-xs font-medium text-white">{company?.name ?? "Absensi Next"}</p>
             <p className="truncate text-[11px] text-sidebar-foreground/50">Workspace</p>
           </div>
           <ChevronsUpDown className="size-3.5 shrink-0 text-sidebar-foreground/40" />

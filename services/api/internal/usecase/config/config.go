@@ -65,6 +65,22 @@ func (s Service) UpdateCompanySettings(ctx context.Context, in CompanySettingsIn
 	return existing, nil
 }
 
+// UpdateWorkingWeekdays sets the company's work week (D-25 holiday
+// resolver) -- ISO weekday numbers (1=Monday..7=Sunday) considered work
+// days. Deliberately not hardcoded Sat/Sun so a 6-day work week is just a
+// different set, not a code change.
+func (s Service) UpdateWorkingWeekdays(ctx context.Context, weekdays []int64) (*domain.CompanySettings, error) {
+	existing, err := s.company.Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	existing.WorkingWeekdays = weekdays
+	if err := s.company.Update(ctx, existing); err != nil {
+		return nil, err
+	}
+	return existing, nil
+}
+
 // --- Shifts (legacy jam_kerja) ---
 
 type ShiftInput struct {

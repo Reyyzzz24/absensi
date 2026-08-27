@@ -38,9 +38,17 @@ func (r EmployeeRepo) FindByID(ctx context.Context, id int64) (*domain.Employee,
 	return &e, nil
 }
 
-func (r EmployeeRepo) List(ctx context.Context) ([]domain.Employee, error) {
+// List returns all employees ordered by name, optionally filtered by a
+// case-insensitive substring match on name or NIK when q is non-empty
+// (topbar/Karyawan search).
+func (r EmployeeRepo) List(ctx context.Context, q string) ([]domain.Employee, error) {
 	var out []domain.Employee
-	err := r.db.WithContext(ctx).Preload("Department").Order("full_name").Find(&out).Error
+	db := r.db.WithContext(ctx).Preload("Department").Order("full_name")
+	if q != "" {
+		like := "%" + q + "%"
+		db = db.Where("full_name ILIKE ? OR nik ILIKE ?", like, like)
+	}
+	err := db.Find(&out).Error
 	return out, err
 }
 

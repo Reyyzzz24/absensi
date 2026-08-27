@@ -12,6 +12,7 @@ import (
 	"github.com/eprisi/absensi-next/services/api/internal/repo"
 	"github.com/eprisi/absensi-next/services/api/internal/testutil"
 	"github.com/eprisi/absensi-next/services/api/internal/usecase/attendance"
+	"github.com/eprisi/absensi-next/services/api/internal/usecase/holiday"
 )
 
 // newService wires a real attendance.Service against a fresh test database.
@@ -21,7 +22,8 @@ func newService(t *testing.T) (attendance.Service, *gorm.DB) {
 	locations := repo.NewOfficeLocationRepo(gdb)
 	assignments := repo.NewFieldAssignmentRepo(gdb)
 	schedules := repo.NewShiftScheduleRepo(gdb)
-	return attendance.NewService(gdb, locations, assignments, schedules), gdb
+	holidays := holiday.NewService(repo.NewCompanySettingsRepo(gdb), repo.NewNationalHolidayRepo(gdb), repo.NewCompanyHolidayRepo(gdb), holiday.NewGoogleCalendarFetcher())
+	return attendance.NewService(gdb, locations, assignments, schedules, holidays), gdb
 }
 
 func mustCreateEmployee(t *testing.T, gdb *gorm.DB, nik string) domain.Employee {
@@ -275,6 +277,45 @@ func TestCheckIn_LateAfterGracePeriod(t *testing.T) {
 	}
 	if row.IsLate == nil || !*row.IsLate {
 		t.Fatalf("expected is_late=true, got %v", row.IsLate)
+	}
+}
+
+// D-25: check-in on a resolved holiday is allowed (default policy) but is
+// never "late" and is tagged is_holiday -- there's no shift obligation to
+// be late against on a libur day, even if the employee has a shift
+// assigned and shows up "late" by the clock.
+func TestCheckIn_OnCompanyHoliday_AllowedNotLateAndTagged(t *testing.T) {
+	svc, gdb := newService(t)
+	ctx := context.Background()
+	emp := mustCreateEmployee(t, gdb, "0001")
+	mustCreateOfficeLocation(t, gdb, -6.2, 106.8, 100)
+
+	shift := mustCreateShift(t, gdb, "SH-EARLY", "00:00:01", "00:00:02", 0)
+	today := time.Now().In(mustLoadJakarta())
+	civilToday := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, today.Location())
+	mustAssignShift(t, gdb, emp.ID, civilToday, shift.ID)
+
+	admin := mustCreateAdminUser(t, gdb)
+	if err := gdb.Create(&domain.CompanyHoliday{
+		StartDate: civilToday, EndDate: civilToday, Name: "Libur uji coba", Type: domain.CompanyHolidayTypeLibur, CreatedBy: admin.ID,
+	}).Error; err != nil {
+		t.Fatalf("seed company holiday: %v", err)
+	}
+
+	row, err := svc.CheckInOrOut(ctx, attendance.CheckInInput{
+		EmployeeID: emp.ID,
+		Latitude:   -6.2,
+		Longitude:  106.8,
+		PhotoPath:  "x.png",
+	})
+	if err != nil {
+		t.Fatalf("expected check-in to be allowed on a holiday, got error: %v", err)
+	}
+	if row.IsLate != nil {
+		t.Fatalf("expected is_late to stay unset on a holiday check-in, got %v", *row.IsLate)
+	}
+	if !row.IsHoliday {
+		t.Fatalf("expected the attendance row to be tagged is_holiday")
 	}
 }
 

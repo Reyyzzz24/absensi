@@ -98,6 +98,9 @@ export type RecapDay = {
   date: string;
   status: RecapDayStatus;
   is_late?: boolean;
+  // Set even when status="hadir" -- e.g. voluntary/overtime work on a
+  // libur day (D-25 holiday resolver).
+  is_holiday?: boolean;
 };
 
 export type EmployeeRecap = {
@@ -156,4 +159,52 @@ export type CompanySettings = {
   id: number;
   name: string;
   logo_path?: string;
+  // ISO weekday numbers (1=Monday..7=Sunday) considered work days -- D-25
+  // holiday resolver. Default {1,2,3,4,5}; a 6-day work week is just a
+  // different array, not hardcoded Sat/Sun.
+  working_weekdays: number[];
+};
+
+// --- Holiday management (D-25) ---
+// Three sources combined by one resolver: configurable weekend, nationally
+// synced holidays (incl. cuti bersama), and manual company holidays.
+// Precedence when sources overlap: national > company > weekend.
+
+export type HolidaySource = "none" | "weekend" | "national" | "company";
+
+export type HolidayDayStatus = {
+  is_holiday: boolean;
+  source: HolidaySource;
+  label?: string;
+  is_cuti_bersama?: boolean;
+};
+
+// GET /holidays/calendar and /admin/holidays/calendar response item.
+export type HolidayCalendarDay = {
+  date: string; // YYYY-MM-DD
+} & HolidayDayStatus;
+
+export type NationalHoliday = {
+  id: number;
+  holiday_date: string; // YYYY-MM-DD
+  name: string;
+  year: number;
+  is_cuti_bersama: boolean;
+  source: "sync" | "manual";
+  created_at: string;
+  updated_at: string;
+};
+
+export type CompanyHolidayType = "libur" | "cuti_bersama";
+
+export type CompanyHoliday = {
+  id: number;
+  start_date: string; // YYYY-MM-DD
+  end_date: string; // YYYY-MM-DD
+  name: string;
+  type: CompanyHolidayType;
+  note?: string;
+  created_by: number;
+  created_at: string;
+  updated_at: string;
 };

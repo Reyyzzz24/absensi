@@ -6,6 +6,7 @@ import {
   Building2,
   Clock,
   CalendarClock,
+  CalendarOff,
   MapPin,
   Briefcase,
   FileBarChart,
@@ -43,6 +44,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Manajemen",
     items: [
       { label: "Cuti & Izin", href: "/admin/leave-requests", icon: CalendarClock },
+      { label: "Hari Libur", href: "/admin/config/holidays", icon: CalendarOff },
       { label: "Lokasi / Geofence", href: "/admin/config/office-locations", icon: MapPin },
       { label: "Dinas Luar", href: "/admin/config/field-assignments", icon: Briefcase },
       { label: "Laporan", href: "/admin/reports/recap", icon: FileBarChart },

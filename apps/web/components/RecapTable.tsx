@@ -54,10 +54,17 @@ export function RecapTable({ recap }: { recap: MonthRecap }) {
           cell: (info) => {
             const day = info.row.original.days[d - 1];
             if (!day) return null;
+            // Hadir on a resolved holiday (D-25) -- e.g. voluntary/overtime
+            // work on a libur day -- still shows "H" (they DID show up),
+            // just with a ring so it reads differently from an ordinary
+            // workday check-in.
+            const holidayHadir = day.status === "hadir" && day.is_holiday;
             return (
               <span
-                className={`inline-flex h-5 w-5 items-center justify-center rounded ${STATUS_STYLE[day.status]}`}
-                title={day.date}
+                className={`inline-flex h-5 w-5 items-center justify-center rounded ${STATUS_STYLE[day.status]} ${
+                  holidayHadir ? "ring-2 ring-amber-400" : ""
+                }`}
+                title={holidayHadir ? `${day.date} · hadir di hari libur` : day.date}
               >
                 {day.is_late ? "*" : STATUS_LETTER[day.status]}
               </span>

@@ -52,10 +52,11 @@ export const employeeApi = {
 
 export const adminApi = {
   get: <T>(path: string) => authedRequest<T>(ADMIN_ACCESS_COOKIE, path),
-  post: <T>(path: string, body: unknown) =>
-    authedRequest<T>(ADMIN_ACCESS_COOKIE, path, { method: "POST", body: JSON.stringify(body) }),
+  post: <T>(path: string, body?: unknown) =>
+    authedRequest<T>(ADMIN_ACCESS_COOKIE, path, { method: "POST", body: body !== undefined ? JSON.stringify(body) : undefined }),
   put: <T>(path: string, body: unknown) =>
     authedRequest<T>(ADMIN_ACCESS_COOKIE, path, { method: "PUT", body: JSON.stringify(body) }),
+  delete: <T>(path: string) => authedRequest<T>(ADMIN_ACCESS_COOKIE, path, { method: "DELETE" }),
 };
 
 export type SelfAudience = "employee" | "admin";

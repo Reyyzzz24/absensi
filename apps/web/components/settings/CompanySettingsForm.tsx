@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useApiMutation } from "@/lib/useApiMutation";
+import { useCompany } from "@/components/admin-shell/CompanyContext";
 import type { CompanySettings } from "@absensi-next/contracts";
 
 const schema = z.object({ name: z.string().min(1, "Nama perusahaan wajib diisi") });
@@ -20,13 +21,21 @@ export function CompanySettingsForm({ company }: { company: CompanySettings }) {
   const [logoBust, setLogoBust] = useState(0);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { setCompany } = useCompany();
 
-  const mutation = useApiMutation<FormValues>("/api/admin/company", "PUT");
+  const mutation = useApiMutation<FormValues, CompanySettings>("/api/admin/company", "PUT");
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: company.name } });
 
   function onSubmit(values: FormValues) {
     mutation.mutate(values, {
-      onSuccess: () => toast.success("Profil perusahaan tersimpan"),
+      // Update the shared context directly with the server's response
+      // (not a refetch) so the sidebar workspace card changes the instant
+      // Simpan succeeds -- this is the fix for the reported bug (sidebar
+      // used to be a hardcoded string with no data source at all).
+      onSuccess: (data) => {
+        setCompany(data);
+        toast.success("Profil perusahaan tersimpan");
+      },
       onError: (err) => toast.error(err.message),
     });
   }
@@ -57,6 +66,8 @@ export function CompanySettingsForm({ company }: { company: CompanySettings }) {
           const data = await res.json().catch(() => ({}));
           throw new Error(data.error ?? "Gagal mengunggah logo");
         }
+        const updated = (await res.json()) as CompanySettings;
+        setCompany(updated);
         setLogoBust((n) => n + 1);
         toast.success("Logo perusahaan diperbarui");
       } catch (err) {

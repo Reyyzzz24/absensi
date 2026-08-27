@@ -10,17 +10,20 @@ import (
 	"github.com/eprisi/absensi-next/services/api/internal/domain"
 	"github.com/eprisi/absensi-next/services/api/internal/repo"
 	"github.com/eprisi/absensi-next/services/api/internal/testutil"
+	"github.com/eprisi/absensi-next/services/api/internal/usecase/holiday"
 	"github.com/eprisi/absensi-next/services/api/internal/usecase/recap"
 )
 
 func newService(t *testing.T) (recap.Service, *gorm.DB) {
 	t.Helper()
 	gdb := testutil.NewDB(t)
+	holidays := holiday.NewService(repo.NewCompanySettingsRepo(gdb), repo.NewNationalHolidayRepo(gdb), repo.NewCompanyHolidayRepo(gdb), holiday.NewGoogleCalendarFetcher())
 	svc := recap.NewService(
 		repo.NewEmployeeRepo(gdb),
 		repo.NewAttendanceRepo(gdb),
 		repo.NewLeaveRequestRepo(gdb),
 		repo.NewShiftScheduleRepo(gdb),
+		holidays,
 	)
 	return svc, gdb
 }
@@ -84,7 +87,13 @@ func TestGenerate_PendingLeaveDoesNotSuppressAlpha(t *testing.T) {
 	emp := mustCreateEmployee(t, gdb, "0001")
 
 	year, month := 2026, 8
-	leaveDate := time.Date(year, time.Month(month), 15, 0, 0, 0, 0, time.UTC)
+	// The 15th is a Saturday in Aug 2026 -- would now correctly resolve as
+	// "libur" via the D-25 holiday resolver regardless of the leave
+	// request, which defeats this test's actual point (a still-PENDING
+	// leave must not suppress alpha). Use the 17th (a Monday, an ordinary
+	// workday under the default Mon-Fri config) so the two concerns don't
+	// collide.
+	leaveDate := time.Date(year, time.Month(month), 17, 0, 0, 0, 0, time.UTC)
 	lr := domain.LeaveRequest{
 		EmployeeID: emp.ID,
 		Type:       domain.LeaveTypeIzin,
@@ -100,7 +109,7 @@ func TestGenerate_PendingLeaveDoesNotSuppressAlpha(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
-	day := result.Employees[0].Days[14]
+	day := result.Employees[0].Days[16] // day 17 = index 16
 	if day.Status != recap.DayStatusAlpha {
 		t.Fatalf("expected a still-pending leave day to remain alpha, got %s", day.Status)
 	}

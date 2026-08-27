@@ -20,7 +20,8 @@ func NewEmployeeHandler(service employee.Service) EmployeeHandler {
 }
 
 func (h EmployeeHandler) List(w http.ResponseWriter, r *http.Request) {
-	list, err := h.service.List(r.Context())
+	q := r.URL.Query().Get("q")
+	list, err := h.service.List(r.Context(), q)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list employees")
 		return

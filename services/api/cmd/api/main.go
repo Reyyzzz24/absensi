@@ -23,6 +23,7 @@ import (
 	configusecase "github.com/eprisi/absensi-next/services/api/internal/usecase/config"
 	"github.com/eprisi/absensi-next/services/api/internal/usecase/department"
 	"github.com/eprisi/absensi-next/services/api/internal/usecase/employee"
+	"github.com/eprisi/absensi-next/services/api/internal/usecase/holiday"
 	"github.com/eprisi/absensi-next/services/api/internal/usecase/leave"
 	"github.com/eprisi/absensi-next/services/api/internal/usecase/monitoring"
 	"github.com/eprisi/absensi-next/services/api/internal/usecase/notification"
@@ -63,7 +64,17 @@ func main() {
 	officeLocationRepo := repo.NewOfficeLocationRepo(gdb)
 	fieldAssignmentRepo := repo.NewFieldAssignmentRepo(gdb)
 	shiftScheduleRepo := repo.NewShiftScheduleRepo(gdb)
-	attendanceService := attendance.NewService(gdb, officeLocationRepo, fieldAssignmentRepo, shiftScheduleRepo)
+
+	// D-25: holiday resolver (weekend/national/company), single source of
+	// truth for attendance check-in and the monthly recap grid -- never
+	// generates attendance rows, resolves on demand.
+	companySettingsRepo := repo.NewCompanySettingsRepo(gdb)
+	nationalHolidayRepo := repo.NewNationalHolidayRepo(gdb)
+	companyHolidayRepo := repo.NewCompanyHolidayRepo(gdb)
+	holidayService := holiday.NewService(companySettingsRepo, nationalHolidayRepo, companyHolidayRepo, holiday.NewGoogleCalendarFetcher())
+	holidayHandler := handler.NewHolidayHandler(holidayService)
+
+	attendanceService := attendance.NewService(gdb, officeLocationRepo, fieldAssignmentRepo, shiftScheduleRepo, holidayService)
 	photoStore := storage.NewLocalStore(cfg.StorageDir)
 	attendanceHandler := handler.NewAttendanceHandler(attendanceService, photoStore)
 
@@ -91,7 +102,6 @@ func main() {
 	shiftRepo := repo.NewShiftRepo(gdb)
 	weeklyShiftDefaultRepo := repo.NewWeeklyShiftDefaultRepo(gdb)
 	workScheduleRepo := repo.NewWorkScheduleRepo(gdb)
-	companySettingsRepo := repo.NewCompanySettingsRepo(gdb)
 	configService := configusecase.NewService(shiftRepo, weeklyShiftDefaultRepo, workScheduleRepo, officeLocationRepo, fieldAssignmentRepo, companySettingsRepo)
 	configHandler := handler.NewConfigHandler(configService, photoStore)
 
@@ -106,7 +116,7 @@ func main() {
 	monitoringService := monitoring.NewService(attendanceRepo, photoStore)
 	monitoringHandler := handler.NewMonitoringHandler(monitoringService)
 
-	recapService := recap.NewService(employeeRepo, attendanceRepo, leaveRepo, shiftScheduleRepo)
+	recapService := recap.NewService(employeeRepo, attendanceRepo, leaveRepo, shiftScheduleRepo, holidayService)
 	recapHandler := handler.NewRecapHandler(recapService)
 
 	// D-4: rate limit login attempts by client IP. See middleware.LoginRateLimiter
@@ -174,6 +184,11 @@ func main() {
 			selfRoutes.Patch("/notifications/read-all", notificationHandler.MarkAllRead)
 			selfRoutes.Get("/notification-preferences", notificationHandler.Preferences)
 			selfRoutes.Put("/notification-preferences", notificationHandler.SetPreference)
+
+			// Non-sensitive read (both audiences) so a future
+			// employee-facing weekly strip can mark holidays too, not just
+			// the admin "Hari Libur" calendar page.
+			selfRoutes.Get("/holidays/calendar", holidayHandler.Calendar)
 		})
 
 		api.Group(func(adminRoutes chi.Router) {
@@ -198,6 +213,13 @@ func main() {
 			adminRoutes.Get("/admin/config/company", configHandler.GetCompanySettings)
 			adminRoutes.Get("/admin/config/company/logo", configHandler.CompanyLogo)
 
+			// Holiday management (D-25) -- reads are admin-tier, mutations
+			// (sync/manual CRUD/working-weekdays) are superadmin-only below,
+			// same RBAC shape as shifts/office-locations.
+			adminRoutes.Get("/admin/holidays/calendar", holidayHandler.Calendar)
+			adminRoutes.Get("/admin/holidays/national", holidayHandler.ListNational)
+			adminRoutes.Get("/admin/holidays/company", holidayHandler.ListCompany)
+
 			adminRoutes.Get("/admin/config/shifts", configHandler.ListShifts)
 			adminRoutes.Get("/admin/config/office-locations", configHandler.ListOfficeLocations)
 			adminRoutes.Get("/admin/config/field-assignments", configHandler.ListFieldAssignments)
@@ -216,6 +238,12 @@ func main() {
 				superadminRoutes.Put("/admin/config/office-locations/{id}", configHandler.UpdateOfficeLocation)
 				superadminRoutes.Put("/admin/config/company", configHandler.UpdateCompanySettings)
 				superadminRoutes.Post("/admin/config/company/logo", configHandler.UploadCompanyLogo)
+				superadminRoutes.Put("/admin/config/working-weekdays", configHandler.UpdateWorkingWeekdays)
+
+				superadminRoutes.Post("/admin/holidays/national/sync", holidayHandler.SyncNational)
+				superadminRoutes.Post("/admin/holidays/company", holidayHandler.CreateCompany)
+				superadminRoutes.Put("/admin/holidays/company/{id}", holidayHandler.UpdateCompany)
+				superadminRoutes.Delete("/admin/holidays/company/{id}", holidayHandler.DeleteCompany)
 			})
 		})
 

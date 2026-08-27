@@ -130,6 +130,33 @@ func (h ConfigHandler) CompanyLogo(w http.ResponseWriter, r *http.Request) {
 	w.Write(bytes)
 }
 
+type workingWeekdaysRequest struct {
+	WorkingWeekdays []int64 `json:"working_weekdays"`
+}
+
+// UpdateWorkingWeekdays sets which ISO weekdays (1=Monday..7=Sunday) count
+// as work days for the holiday resolver (D-25) -- e.g. a 6-day work week is
+// {1,2,3,4,5,6} (only Sunday off), not hardcoded Sat/Sun.
+func (h ConfigHandler) UpdateWorkingWeekdays(w http.ResponseWriter, r *http.Request) {
+	var req workingWeekdaysRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.WorkingWeekdays) == 0 {
+		writeError(w, http.StatusUnprocessableEntity, "working_weekdays must be a non-empty array of 1-7")
+		return
+	}
+	for _, d := range req.WorkingWeekdays {
+		if d < 1 || d > 7 {
+			writeError(w, http.StatusUnprocessableEntity, "working_weekdays values must be 1-7 (ISO weekday)")
+			return
+		}
+	}
+	c, err := h.service.UpdateWorkingWeekdays(r.Context(), req.WorkingWeekdays)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update working weekdays")
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
 // --- Shifts ---
 
 type shiftRequest struct {

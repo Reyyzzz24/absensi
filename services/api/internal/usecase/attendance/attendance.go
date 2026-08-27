@@ -15,6 +15,7 @@ import (
 	"github.com/eprisi/absensi-next/services/api/internal/domain"
 	"github.com/eprisi/absensi-next/services/api/internal/platform/geo"
 	"github.com/eprisi/absensi-next/services/api/internal/repo"
+	"github.com/eprisi/absensi-next/services/api/internal/usecase/holiday"
 )
 
 var (
@@ -51,10 +52,11 @@ type Service struct {
 	locations   repo.OfficeLocationRepo
 	assignments repo.FieldAssignmentRepo
 	schedules   repo.ShiftScheduleRepo
+	holidays    holiday.Service
 }
 
-func NewService(db *gorm.DB, locations repo.OfficeLocationRepo, assignments repo.FieldAssignmentRepo, schedules repo.ShiftScheduleRepo) Service {
-	return Service{db: db, locations: locations, assignments: assignments, schedules: schedules}
+func NewService(db *gorm.DB, locations repo.OfficeLocationRepo, assignments repo.FieldAssignmentRepo, schedules repo.ShiftScheduleRepo, holidays holiday.Service) Service {
+	return Service{db: db, locations: locations, assignments: assignments, schedules: schedules, holidays: holidays}
 }
 
 type CheckInInput struct {
@@ -161,10 +163,22 @@ func (s Service) checkIn(ctx context.Context, tx *gorm.DB, workDate time.Time, c
 		return nil, err
 	}
 
+	// D-25: holiday status is resolved from workDate (the shift's civil
+	// start date -- see civilDate/CheckInOrOut above), never a fresh
+	// time.Now() date, so an overnight shift starting Friday night is
+	// always evaluated against Friday, not the Saturday the checkout
+	// physically happens on.
+	holidayStatus, err := s.holidays.ResolveDayStatus(ctx, workDate)
+	if err != nil {
+		return nil, err
+	}
+
 	var isLate *bool
 	// Only the day's first cycle is evaluated against the shift start time;
 	// later cycles (multi-cycle days, D-23) aren't "late" in the same sense.
-	if cycleNumber == 1 && shift != nil && shift.StartTime != nil {
+	// A holiday check-in (voluntary/overtime work on a libur day) is never
+	// "late" either -- there's no shift obligation to be late against.
+	if cycleNumber == 1 && shift != nil && shift.StartTime != nil && !holidayStatus.IsHoliday {
 		late := isAfterGrace(now, *shift.StartTime, shift.LateGraceMinutes)
 		isLate = &late
 	}
@@ -187,6 +201,7 @@ func (s Service) checkIn(ctx context.Context, tx *gorm.DB, workDate time.Time, c
 		CheckInDistanceM: distance,
 		CheckInPhotoPath: &in.PhotoPath,
 		IsLate:           isLate,
+		IsHoliday:        holidayStatus.IsHoliday,
 		Status:           domain.AttendanceStatusOpen,
 	}
 

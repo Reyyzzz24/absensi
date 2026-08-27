@@ -38,8 +38,8 @@ type CreateInput struct {
 	Phone        string
 }
 
-func (s Service) List(ctx context.Context) ([]domain.Employee, error) {
-	return s.repo.List(ctx)
+func (s Service) List(ctx context.Context, q string) ([]domain.Employee, error) {
+	return s.repo.List(ctx, q)
 }
 
 func (s Service) Create(ctx context.Context, in CreateInput) (*domain.Employee, error) {
